@@ -70,9 +70,12 @@ def load_config(path="configs/config.yaml"):
         path = ROOT / path
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     for key in ("database", "data_dir", "artifact_dir", "market_filters"):
+        if key not in cfg:  # collector configs carry no filters/LLM settings
+            continue
         value = Path(cfg[key])
         cfg[key] = str(value if value.is_absolute() else ROOT / value)
-    cfg["llm"]["prompt_dir"] = str(ROOT / cfg["llm"]["prompt_dir"])
+    if "llm" in cfg:
+        cfg["llm"]["prompt_dir"] = str(ROOT / cfg["llm"]["prompt_dir"])
     cfg["config_path"] = str(path)
     return cfg
 
@@ -97,8 +100,59 @@ def probability(value):
 
 
 def source_fingerprint():
-    return digest({str(p.relative_to(ROOT)): p.read_text(encoding='utf-8')
-                   for folder in ('src', 'scripts') for p in sorted((ROOT/folder).rglob('*.py'))})
+    """Whole-project hash. Too broad for run identity (any collector edit would change it); kept for audits."""
+    return _fingerprint(('src', 'scripts'))
+
+
+# Machine-specific keys must not change an experiment's identity (laptop vs server paths).
+PATH_KEYS = ('database', 'data_dir', 'artifact_dir', 'market_filters', 'config_path')
+# Settings that change how a run is operated, not what it forecasts.
+OPERATIONAL_LLM = ('max_calls_per_run', 'timeout_seconds', 'concurrency', 'retries', 'format_retries',
+                   'retry_wait_seconds', 'prompt_dir')
+
+# Only code that decides what the LLM sees and how forecasts are made belongs to a forecast run's identity.
+FORECAST_CODE = ('src/agents', 'src/retrieval', 'src/baselines/llm_no_retrieval.py',
+                 'src/baselines/single_agent_rag.py', 'src/baselines/single_agent_kx.py')
+# Frozen analysis = forecasting code plus everything that fits models and scores them. Ingestion,
+# the database layer and the dashboard are deliberately excluded so collector fixes never void a freeze.
+ANALYSIS_CODE = FORECAST_CODE + ('src/baselines/stat_logreg.py', 'src/baselines/market_only.py', 'src/dataset',
+                                 'src/features', 'src/models', 'src/evaluation')
+
+
+def portable(cfg):
+    out = {k: v for k, v in cfg.items() if k not in PATH_KEYS}
+    if 'llm' in out:
+        out['llm'] = {k: v for k, v in out['llm'].items() if k != 'prompt_dir'}
+    return out
+
+
+def config_digest(cfg):
+    """Whole configuration, independent of where the project lives."""
+    return digest(portable(cfg))
+
+
+def forecast_identity(cfg):
+    """What determines a forecast: LLM settings, retrieval rules, mode. Split dates and paths are not part of it."""
+    llm = {k: v for k, v in cfg['llm'].items() if k not in OPERATIONAL_LLM}
+    return {'mode': cfg['mode'], 'llm': llm, 'retrieval': cfg['retrieval'],
+            'lookback_days': cfg['dataset']['lookback_days']}
+
+
+def _fingerprint(paths):
+    files = set()
+    for rel in paths:
+        target = ROOT / rel
+        files.update(target.rglob('*.py') if target.is_dir() else [target])
+    # Forward-slash keys and text-mode reads keep the hash identical on Windows and Linux.
+    return digest({f.relative_to(ROOT).as_posix(): f.read_text(encoding='utf-8') for f in sorted(files)})
+
+
+def forecast_fingerprint():
+    return _fingerprint(FORECAST_CODE)
+
+
+def analysis_fingerprint():
+    return _fingerprint(ANALYSIS_CODE)
 
 
 def runtime_info():

@@ -1,4 +1,7 @@
 """RSS/Atom and GDELT discovery. Headline-only records are explicitly labelled."""
+import json
+import time
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -57,18 +60,57 @@ def collect_rss(client, con, url):
     return sum(int(add_document(con, r)) for r in rss_records(payload, observed, ref))
 
 
-def collect_gdelt(client, con, query):
-    payload, observed, ref = client.get('https://api.gdeltproject.org/api/v2/doc/doc',
-        {'query': query, 'mode': 'artlist', 'format': 'json', 'maxrecords': 100, 'timespan': '1d'})
+GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
+
+
+class GdeltError(RuntimeError):
+    """A failed GDELT request. Distinct from a successful request that found no articles."""
+
+
+def parse_gdelt(text):
+    """Return the article list. [] means a genuine empty result; failures raise GdeltError."""
+    body = text.strip()
+    if not body:
+        return []  # GDELT answers an empty body when nothing matches
+    if body[0] != '{':
+        # e.g. "Please limit requests to one every 5 seconds" or a query-syntax error, sent with HTTP 200
+        raise GdeltError('GDELT non-JSON reply: ' + body[:100].replace(chr(10), ' '))
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise GdeltError('GDELT invalid JSON: ' + body[:100].replace(chr(10), ' ')) from exc
+    return data.get('articles', [])
+
+
+def collect_gdelt(client, con, query, attempts=3, wait=15):
+    """GDELT allows ~1 request per 5 s and signals throttling with HTTP 429 or a text body."""
+    last = None
+    for attempt in range(attempts):
+        text, observed, ref = client.get(GDELT_URL,
+            {'query': query, 'mode': 'artlist', 'format': 'json', 'maxrecords': 100, 'timespan': '1d'},
+            json_response=False, retries=3, min_interval=6, backoff=wait)
+        try:
+            articles = parse_gdelt(text)
+            break
+        except GdeltError as exc:
+            last = exc
+            if 'limit requests' not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(wait)
+    else:
+        raise last
     n = 0
-    for article in payload.get('articles', []):
-        # GDELT seendate is discovery time, not guaranteed original publication time.
-        from datetime import datetime, timezone
-        seen = int(datetime.strptime(article['seendate'], '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
+    for article in articles:
+        try:
+            # GDELT seendate is discovery time, not guaranteed original publication time.
+            seen = int(datetime.strptime(article['seendate'], '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
+            url, title = article['url'], article['title']
+        except (KeyError, ValueError):
+            continue
         if seen > observed:
             continue
-        n += int(add_document(con, dict(url=article['url'], title=article['title'], body='',
-            source=article.get('domain') or urlsplit(article['url']).netloc, source_type='news',
+        n += int(add_document(con, dict(url=url, title=title, body='',
+            source=article.get('domain') or urlsplit(url).netloc, source_type='news',
             published_at=seen, available_at=observed, observed_at=observed,
             provenance='prospective', raw_ref=ref, source_kind='real', content_kind='headline')))
     return n

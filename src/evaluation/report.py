@@ -4,7 +4,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src.common import digest, read_json, timestamp, utcnow, write_json, ROOT, source_fingerprint
+from src.common import digest, read_json, timestamp, utcnow, write_json, ROOT, config_digest, analysis_fingerprint
 from src.dataset.splits import chronological_split, group_weights
 from src.evaluation.metrics import score
 from src.evaluation.calibration import reliability, plot_calibration
@@ -16,7 +16,7 @@ def evaluate(con, cfg, run_id, allow_exploratory=False):
     path = Path(cfg['artifact_dir'])/run_id[:12]
     # Load only models created locally by this project. Pickle/joblib is not a safe import format.
     bundle = joblib.load(path/'models.joblib')
-    if bundle['config_hash'] != digest(cfg) or bundle['run_id'] != run_id:
+    if bundle['config_hash'] != config_digest(cfg) or bundle['run_id'] != run_id:
         raise ValueError('Model/config/run identity mismatch')
     data = joined_forecasts(con, run_id)
     _, _, test, _ = chronological_split(data, timestamp(cfg['training']['train_end']),
@@ -28,11 +28,11 @@ def evaluate(con, cfg, run_id, allow_exploratory=False):
     synthetic = bundle['source_kind'] == 'synthetic'
     if not synthetic and not allow_exploratory:
         lock = read_json(Path(cfg['artifact_dir'])/'protocol_lock.json')
-        if lock['config_hash'] != digest(cfg) or lock['frozen_at'] > int(test.cutoff.min()):
+        if lock['config_hash'] != config_digest(cfg) or lock['frozen_at'] > int(test.cutoff.min()):
             raise ValueError('Protocol was not frozen before test forecasts; use explicit exploratory flag')
         if lock['prompt_hash'] != con.execute('SELECT prompt_hash FROM forecast_runs WHERE run_id=?', (run_id,)).fetchone()[0]:
             raise ValueError('Prompts changed after protocol freeze')
-        if lock['code_hash'] != source_fingerprint() or lock['protocol_hash'] != digest((ROOT/'docs'/'protocol.md').read_text()):
+        if lock['code_hash'] != analysis_fingerprint() or lock['protocol_hash'] != digest((ROOT/'docs'/'protocol.md').read_text()):
             raise ValueError('Code/protocol changed after freeze')
     test['market_only'] = test.market_price
     test['constant_50'] = .5

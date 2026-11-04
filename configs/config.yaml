@@ -30,7 +30,7 @@ social:
   subreddits: []
 dataset:
   horizons_hours: [24, 168]
-  max_price_age_seconds: 21600
+  max_price_age_seconds: 900     # the market benchmark must be as fresh as the evidence
   lookback_days: 30
   start: null
   end: null
@@ -45,13 +45,18 @@ llm:
   model: null
   model_frozen_before: null
   temperature: 0
-  max_output_tokens: 600
+  max_output_tokens: 8192        # thinking models count reasoning tokens against this cap
   max_calls_per_run: 100
   timeout_seconds: 60
   allow_retrospective: false
   max_forecast_delay_seconds: 900
   prompt_dir: configs/prompts
   k: 3
+  k_temperature: 0.7             # repeated-call baseline must sample, or its calls are identical
+  reasoning_effort: null         # low | medium | high for thinking models (Gemini 3.8 Flash cannot disable thinking)
+  retries: 3                     # HTTP 429/5xx and network failures
+  format_retries: 2              # unusable JSON / invented citations / truncated output
+  concurrency: 1                 # snapshots forecast in parallel (watch provider rate limits)
 training:
   train_end: null
   validation_end: null

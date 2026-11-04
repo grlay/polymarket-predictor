@@ -18,7 +18,7 @@ def main():
     result = build(con, cfg, at)
     target = Path(cfg['data_dir'])/'processed'
     target.mkdir(parents=True, exist_ok=True)
-    frame(con).to_csv(target/'snapshots.csv', index=False)
+    frame(con, pilot=None).to_csv(target/'snapshots.csv', index=False)
     write_json(target/'build_report.json', result)
     print(json.dumps(result, indent=2))
     con.close()

@@ -137,3 +137,76 @@ source text whose license does not allow redistribution. The public reproducibil
 contain record IDs, timestamps, hashes, source URLs, collection instructions and synthetic fixtures.
 
 No repository was pushed, no cron task installed and no message sent to your supervisor by this package.
+
+## Scheduled collector (data collection only)
+
+`configs/collect.yaml` drives collection; `config.yaml` drives forecasting. They are separate so that
+editing the watchlist never changes a forecasting run identity. Both use `data/research/research.sqlite`.
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.run_collect --profile discovery     # watchlist markets (tag based)
+.\.venv\Scripts\python.exe -m scripts.run_collect --profile quotes        # order-book midpoints
+.\.venv\Scripts\python.exe -m scripts.run_collect --profile rss           # news feeds
+.\.venv\Scripts\python.exe -m scripts.run_collect --profile gdelt         # event queries (rate limited)
+.\.venv\Scripts\python.exe -m scripts.run_collect --profile resolutions   # final labels, batched
+powershell -ExecutionPolicy Bypass -File scripts\schedule_collector.ps1     # install Windows tasks
+powershell -ExecutionPolicy Bypass -File scripts\schedule_collector.ps1 -Remove
+```
+
+Cadence installed by the script: quotes 10 min, rss 15 min, discovery 3 h, gdelt 1 h, resolutions 1 h.
+Keep the laptop plugged in with sleep set to "Never": a missed poll cannot be recovered afterwards.
+
+- **Health:** `artifacts/research/collector_history.jsonl` has one line per run (ok / failed / zero-result counts
+  per stage, sample errors). A failed request is reported under `failed`; a successful search with no articles is
+  reported under `zero_results`. Uncaught crashes go to `artifacts/research/collector_errors.log`.
+  For `resolutions`, `zero_results` is normal (nothing new settled).
+- **Exit code 2** means failures worth reading (for quotes: at least 25% failed).
+- **Raw archive:** one gzip file per profile per UTC day under `data/research/raw/<date>/`. Every database
+  `raw_ref` is `path#offset+length`; read one with `src.ingestion.http.read_archive(raw_ref)`.
+- **Locks:** a profile skips its run if the previous one is still active (stale after 30 min).
+- **Measured on 2026-11-04** (150 tracked markets): about 0.8 KB per quote book compressed, about 2 MB per
+  discovery run, 8 feeds about 0.1 MB per run. With `max_tracked: 300` expect roughly 60-65 MB/day, about
+  7-8 GB for four months including SQLite. A quote run over 300 markets takes about 5 minutes. Polling quotes
+  every 15 min instead of 10 reduces volume by about a third.
+- **Labels:** `/v2/resolutions` records have `status`, `price`, `last_update_timestamp` (no payouts array).
+  `proposed` is not a label. Price `0` means the second outcome won, `10**18` the first, anything else is
+  excluded. At most 20 conditions per request.
+
+### Checking on the collector
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.collector_status                    # alive? gaps? counts? disk?
+.\.venv\Scripts\python.exe -m scripts.backup_db --dest E:\hx2605_backup   # also scheduled daily at 03:00
+```
+
+`collector_status` reads `collector_history.jsonl` and the database (read-only). A profile is STALE when its last
+run is older than 2.5 intervals; it also lists the longest gaps of the last 7 days (laptop asleep or offline),
+open markets with no quote in 30 minutes, unresolved markets past their deadline, and projected disk days left.
+Exit code 2 means something needs attention. Run it after waking the laptop and once a day.
+
+`backup_db` takes a consistent online copy of the SQLite file (compressed, 14 kept) and copies each finished
+UTC day of the raw archive once. Point `--dest` at a different drive: a backup on the same disk does not protect
+against disk failure. Gaps cannot be backfilled, so this is the only protection for what is already collected.
+
+## Forecasting with Gemini (checked against Google's docs on 2026-11-04; not yet run with a real key)
+
+```
+LLM_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai
+LLM_MODEL=gemini-3.8-flash
+LLM_API_KEY=<your key>
+```
+
+- `gemini-3.8-flash` is listed as stable. Thinking cannot be disabled (low/medium/high only); output price includes
+  thinking tokens, so `max_output_tokens` is 8192 and a truncated answer is reported, not parsed. Set
+  `llm.reasoning_effort: low` to bound cost and latency.
+- Not found in the docs: temperature guidance for this model. Temperature is configurable (`null` omits it). In the
+  pilot, check that the K repeated calls actually differ; if the model ignores temperature they will not.
+- List price at time of writing: $0.75 / $3.75 per million input / output tokens until 31 Dec 2026, doubling on
+  1 Jan 2027. Free-tier content is used by Google to improve its products; paid-tier content is not.
+- Rough budget (assumptions, not measurements): 8-10 calls per snapshot at about 4k input and 2k output tokens is
+  roughly $0.1 per snapshot. Measure real tokens in the 3-snapshot pilot (`prompt_tokens`, `completion_tokens` and
+  `response_models` are in `agents_latest.json`) before scaling.
+- `python -m scripts.run_agents --limit 3` forecasts the three NEWEST eligible snapshots; snapshots older than
+  `llm.max_forecast_delay_seconds` are skipped and reported as `skipped_stale`.
+- Stage-level failures are expected and logged (HTTP, bad output, no relevant evidence). A programming error stops
+  the run with a traceback instead of being logged as a failed forecast.

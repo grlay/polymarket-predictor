@@ -1,3 +1,4 @@
+The context gives cutoff_utc (treat it as the current time) and, when known, deadline_utc and hours_to_deadline. Reason only from information available at cutoff_utc.
 Estimate the YES probability using the question, resolution rules and reference-class reasoning.
 You have no retrieved documents and no current market probability. Do not invent numerical base rates.
 Identify a plausible reference class and explain uncertainty concisely. When a reliable rate is unavailable,

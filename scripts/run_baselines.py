@@ -5,7 +5,7 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-from src.common import load_config, timestamp, write_json, digest
+from src.common import load_config, timestamp, write_json, config_digest
 from src.db.loaders import connect
 from src.dataset.snapshots import frame
 from src.dataset.splits import chronological_split, group_weights
@@ -23,7 +23,7 @@ def run(con, cfg):
     data['constant_50'] = .5
     data[['snapshot_id','cutoff','event_group','market_id','market_only','constant_50']].to_csv(out/'predictions.csv',index=False)
     manifest = {'status':'RAW_BASELINES_READY_NO_FITTED_MODEL','rows':len(data),
-                'source_kind':sorted(set(data.source_kind)), 'config_hash':digest(cfg)}
+                'source_kind':sorted(set(data.source_kind)), 'config_hash':config_digest(cfg)}
     if cfg['training']['train_end'] and cfg['training']['validation_end']:
         train,val,test,purged=chronological_split(data,timestamp(cfg['training']['train_end']),timestamp(cfg['training']['validation_end']))
         if train.event_group.nunique() >= cfg['training']['min_train_groups'] and val.event_group.nunique() >= cfg['training']['min_validation_groups']:

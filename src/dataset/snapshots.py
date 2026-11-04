@@ -11,7 +11,7 @@ from src.db.loaders import insert, rows, event
 from src.features.market_features import market_features
 
 
-def make_snapshot(con, market, cutoff, cfg, filters):
+def make_snapshot(con, market, cutoff, cfg, filters, pilot=False):
     versions = rows(con, '''SELECT * FROM market_versions WHERE market_id=? AND available_at<=?
         ORDER BY available_at DESC,version_id DESC LIMIT 1''', (market['market_id'], cutoff))
     if not versions:
@@ -30,13 +30,15 @@ def make_snapshot(con, market, cutoff, cfg, filters):
     reason = exclusion_reason(metadata, price['price'], filters)
     if reason:
         raise ValueError(reason)
-    config_hash = digest({'dataset': cfg['dataset'], 'filters': filters, 'mode': cfg['mode']})
+    # --at pilots carry their own mode so they are never pooled with fixed-horizon research snapshots.
+    mode = cfg['mode'] + ('_pilot' if pilot else '')
+    config_hash = digest({'dataset': cfg['dataset'], 'filters': filters, 'mode': mode})
     snap = dict(snapshot_id=digest([market['market_id'], cutoff, config_hash]),
                 market_id=market['market_id'], version_id=metadata['version_id'], cutoff=cutoff,
                 horizon_hours=(metadata['scheduled_end']-cutoff)/3600,
                 market_price=price['price'], price_id=price['price_id'],
                 features_json=canonical(market_features(con, market['market_id'], cutoff, price, metadata)),
-                mode=cfg['mode'], source_kind=market['source_kind'], config_hash=config_hash)
+                mode=mode, source_kind=market['source_kind'], config_hash=config_hash)
     check_snapshot(snap, metadata, price)
     insert(con, 'snapshots', snap)
     return snap
@@ -68,7 +70,7 @@ def build(con, cfg, at=None):
             if cfg['dataset'].get('end') and cutoff >= timestamp(cfg['dataset']['end']):
                 continue
             try:
-                make_snapshot(con, market, cutoff, cfg, filters)
+                make_snapshot(con, market, cutoff, cfg, filters, pilot=at is not None)
                 total += 1
             except ValueError as exc:
                 excluded.append({'market_id': market['market_id'], 'cutoff': cutoff, 'reason': str(exc)})
@@ -76,11 +78,13 @@ def build(con, cfg, at=None):
     return {'eligible': total, 'excluded': excluded}
 
 
-def frame(con):
+def frame(con, pilot=False):
+    """Snapshots as a DataFrame. pilot=False: fixed-horizon research snapshots only; True: --at pilots only; None: all."""
     records = rows(con, '''SELECT s.*,m.event_group,v.question,v.rules,v.category,
         r.outcome,r.resolved_at,r.label_available_at FROM snapshots s
         JOIN markets m USING(market_id) JOIN market_versions v USING(version_id)
         LEFT JOIN resolutions r ON r.market_id=s.market_id ORDER BY cutoff,snapshot_id''')
+    records = [r for r in records if pilot is None or r['mode'].endswith('_pilot') == pilot]
     for row in records:
         row.update(json.loads(row.pop('features_json')))
     return pd.DataFrame(records)

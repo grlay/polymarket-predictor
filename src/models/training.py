@@ -5,7 +5,8 @@ import joblib
 import pandas as pd
 
 from src.agents.orchestrator import SYSTEMS
-from src.common import digest, timestamp, utcnow, write_json, read_json, source_fingerprint
+from src.common import (digest, timestamp, utcnow, write_json, read_json, config_digest, forecast_identity,
+                        forecast_fingerprint, analysis_fingerprint)
 from src.dataset.snapshots import frame as dataset_frame
 from src.dataset.splits import chronological_split, group_weights
 from src.evaluation.metrics import brier_score
@@ -13,7 +14,12 @@ from src.models.calibrator import MODEL_COLUMNS, logistic_model, BayesianLogisti
 
 
 def joined_forecasts(con, run_id):
-    data = dataset_frame(con)
+    # Only fixed-horizon snapshots of the dataset configuration this run forecast: --at-now pilots and snapshots
+    # built under other dataset settings must never leak into fitting or evaluation.
+    hashes = {r[0] for r in con.execute(
+        'SELECT DISTINCT s.config_hash FROM snapshots s JOIN forecasts f USING(snapshot_id) WHERE f.run_id=?', (run_id,))}
+    data = dataset_frame(con, pilot=False)
+    data = data[data.config_hash.isin(hashes)].reset_index(drop=True) if not data.empty else data
     records = pd.read_sql_query('SELECT snapshot_id,system,probability FROM forecasts WHERE run_id=? AND status=?',
                                  con, params=(run_id, 'ok'))
     if data.empty or records.empty:
@@ -29,11 +35,11 @@ def fit(con, cfg, run_id):
     if len(set(data.source_kind)) != 1:
         raise ValueError('Mixed source kinds')
     run = con.execute('SELECT * FROM forecast_runs WHERE run_id=?', (run_id,)).fetchone()
-    if run is None or run['config_hash'] != digest(cfg):
-        raise ValueError('Forecast/config mismatch: freeze one config before forecasting and fitting')
+    if run is None or run['config_hash'] != digest(forecast_identity(cfg)):
+        raise ValueError('Forecast/config mismatch: model, prompts or retrieval settings changed since forecasting')
     metadata = read_json(Path(cfg['artifact_dir'])/run_id[:12]/'run_metadata.json')
-    if metadata['code_hash'] != source_fingerprint():
-        raise ValueError('Source code changed after forecasting; start a new versioned run')
+    if metadata['code_hash'] != forecast_fingerprint():
+        raise ValueError('Forecasting code changed after forecasting; start a new versioned run')
     for system in SYSTEMS:
         if system not in data:
             data[system] = float('nan')
@@ -66,10 +72,11 @@ def fit(con, cfg, run_id):
     models['bayesian_correction'] = BayesianLogisticCorrection(cfg['training']['bayesian_prior_sd']).fit(
         final_train, group_weights(final_train))
     parameters['bayesian_correction'] = models['bayesian_correction'].describe()
-    bundle = {'models': models, 'fit_time': val_end, 'run_id': run_id, 'config_hash': digest(cfg),
+    bundle = {'models': models, 'fit_time': val_end, 'run_id': run_id, 'config_hash': config_digest(cfg),
               'source_kind': data.source_kind.iloc[0], 'trained_snapshot_ids': sorted(final_train.snapshot_id)}
     joblib.dump(bundle, artifact/'models.joblib')
-    manifest = {'run_id': run_id, 'config_hash': digest(cfg), 'code_hash': metadata['code_hash'], 'source_kind': bundle['source_kind'],
+    manifest = {'run_id': run_id, 'config_hash': config_digest(cfg), 'code_hash': metadata['code_hash'],
+        'analysis_code_hash': analysis_fingerprint(), 'source_kind': bundle['source_kind'],
         'created_at': utcnow(), 'fit_asof': val_end, 'train_groups': train.event_group.nunique(),
         'validation_groups': validation.event_group.nunique(), 'test_groups': test.event_group.nunique(),
         'purged_groups': purged.event_group.nunique(), 'selection': selections, 'parameters': parameters,

@@ -1,0 +1,85 @@
+# Collector configuration. Collection only: no LLM, no forecasting.
+# Kept separate from config.yaml on purpose: changing the watchlist here must not change the
+# forecasting run identity (run_id hashes config.yaml). Both files share one database.
+#
+# DRAFT WATCHLIST: review tag_slugs / queries / feeds with your supervisor, then record the
+# decision in docs/decisions_log.md. Collection can start now; the watchlist can be tightened later
+# without losing anything already stored (tighten by editing this file; stored markets are kept).
+project: HX2605
+data_dir: data/research
+artifact_dir: artifacts/research
+database: data/research/research.sqlite
+
+http:
+  timeout_seconds: 15
+  retries: 2
+  min_interval_seconds: 0.25
+  user_agent: HX2605-academic-research/0.1
+
+polymarket:
+  gamma_base: https://gamma-api.polymarket.com
+  clob_base: https://clob.polymarket.com
+  data_base: https://data-api.polymarket.com/v2
+  history_backend: v2
+  discovery: events          # tag-based (events endpoint), not "top volume"
+  # Gamma event tag slugs (OR). Checked live on 2026-11-04; 'politics' alone is far too broad
+  # (Spanish mayors, tweet-count markets). 'united-states' and 'trump' are broad but US-centred.
+  tag_slugs:
+    - trump
+    - congress
+    - united-states
+    - us-politics
+    - us-government
+    - white-house
+    - supreme-court
+    - tariffs
+    - immigration
+    - government-shutdown
+    - fed
+    - fed-rates
+  exclude_tag_slugs: [sports]
+  exclude_question_patterns:
+    - '(?i)up or down.*(5|15) min'
+    - '(?i)\btweets?\b'
+  page_size: 100
+  max_pages: 3                       # per tag slug
+  min_days_to_end: 1.1               # need time left for at least the 24 h horizon
+  max_days_to_end: 75                # deadlines inside the collection window, so labels arrive
+  min_liquidity: 1000                # same thresholds as market_filters.yaml, applied at discovery
+  min_volume: 1000
+  min_price: 0.02                    # applied to NEW markets only; tracked markets stay tracked
+  max_price: 0.98
+  max_markets_per_event: 4           # independent events > many sub-markets of one event
+  # Measured 2026-11-04: 80% of candidates had deadline 31 Dec / 1 Jan. Their 24 h and 168 h cutoffs
+  # fall in one week, which a chronological split cannot separate. Cap per deadline date so shorter-dated
+  # markets keep their slots. Discuss with your supervisor; log the choice in docs/decisions_log.md.
+  max_markets_per_deadline_day: 25
+  max_markets_per_discovery: 300
+  max_tracked: 300                   # quotes are polled for at most this many open markets (about 5 min per run)
+  refresh_version_seconds: 21600     # re-store unchanged metadata (volume/liquidity) every 6 h
+  resolution_lookback_days: 60
+  group_overrides: {}
+
+news:
+  # Tested live 2026-11-04. Summaries only (no full text); keep copyrighted text out of public Git.
+  rss_urls:
+    - https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml
+    - https://feeds.bbci.co.uk/news/world/rss.xml
+    - https://feeds.npr.org/1014/rss.xml
+    - https://rss.politico.com/politics-news.xml
+    - https://www.theguardian.com/us-news/us-politics/rss
+    - https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml
+    - https://thehill.com/feed/
+    - https://www.federalreserve.gov/feeds/press_all.xml
+  # DRAFT event-specific queries; GDELT allows ~1 request / 5 s, so the collector spaces them.
+  gdelt_queries:
+    - '"government shutdown"'
+    - '"Federal Reserve" "interest rate"'
+    - '"executive order" Trump'
+    - '"Supreme Court" ruling'
+    - 'tariffs Trump'
+    - '"Speaker Johnson"'
+    - '"Senate vote"'
+
+social:
+  subreddits: []

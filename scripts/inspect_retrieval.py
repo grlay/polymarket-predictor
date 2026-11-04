@@ -20,7 +20,7 @@ def main():
     con = sqlite3.connect(uri, uri=True)
     con.row_factory = sqlite3.Row
     try:
-        data = frame(con)
+        data = frame(con, pilot=None)
         if data.empty:
             print('No saved snapshots.'); return
         selected = data if args.all else data[data.cutoff == data.cutoff.max()]
