@@ -22,55 +22,103 @@ polymarket:
   data_base: https://data-api.polymarket.com/v2
   history_backend: v2
   discovery: events          # tag-based (events endpoint), not "top volume"
-  # Gamma event tag slugs (OR). Checked live on 2026-11-04; 'politics' alone is far too broad
-  # (Spanish mayors, tweet-count markets). 'united-states' and 'trump' are broad but US-centred.
+  # Gamma event tag slugs (OR). Checked live on 2026-11-04 and 2026-11-06; 'politics' alone is far too broad
+  # (Spanish mayors, tweet-count markets). ORDER MATTERS: a market's category is the FIRST matching tag, so the
+  # institution-specific tags come first and the wide nets (us-politics, united-states, trump) last; otherwise
+  # about 70% of markets were labelled 'trump'. Election tags (elections, midterms, ...) are deliberately not
+  # included: 'elections' pulled non-US markets and the 2026 midterms have passed. 'senate', 'mentions' and
+  # 'tweet-markets' do not exist on Gamma (404, 2026-11-06). See docs/decisions_log.md (2026-11-07).
   tag_slugs:
-    - trump
-    - congress
-    - united-states
-    - us-politics
-    - us-government
-    - white-house
     - supreme-court
-    - tariffs
-    - immigration
-    - government-shutdown
+    - congress
+    - house-of-representatives
     - fed
     - fed-rates
+    - government-shutdown
+    - white-house
+    - us-government
+    - doj
+    - dhs
+    - hegseth
+    - tariffs
+    - immigration
+    - us-politics
+    - united-states
+    - trump
+  # Exclude beats include: an event carrying any excluded tag is dropped even if it also carries an include tag.
+  # geopolitics/world are NOT excluded on purpose: US federal actions can carry them. crypto and pop-culture are
+  # NOT excluded either (live check 2026-11-07): 'crypto' would remove the Clarity Act / crypto-market-structure
+  # bills and a national Ethereum reserve; 'pop-culture' would remove weed rescheduling and FDA reclassification.
+  # Those are federal actions; Layer 2 and the question patterns below remove the genuinely off-scope markets.
+  # senate-elections was tried and dropped: its 9 passing markets added no eligible market that other tags did not
+  # already catch (Overton confirmation, Alaska senator) and included a Spanish Senate market and a vote-share margin.
   exclude_tag_slugs: [sports]
+  # Patterns match the market question only (never outcomes). Each maps to a Layer 2 exclusion in the shared spec.
+  # Discovery drops are irreversible (only counts per reason are logged), so patterns stay narrow: a bare
+  # 'post', 'meeting' or 'more than N' would also remove FOMC and legitimate count-free markets.
   exclude_question_patterns:
     - '(?i)up or down.*(5|15) min'
     - '(?i)\btweets?\b'
+    - '(?i)\btruth social\b'           # post-count markets: a count, not a decision
+    - '(?i)\binsults?\b'               # personal behaviour, no official record
+    - '(?i)\bpublicly praise\b'        # personal behaviour, no official record
+    - '(?i)\bodds leader\b'            # defined by market prices/polls
+    - '(?i)\bspeaks? to\b'             # calls between leaders (excluded in the spec)
+    - '(?i)\bmeets? with\b'            # meetings between leaders (excluded in the spec)
+    - '(?i)\bvisits?\b'                # trips
+    - '(?i)\bapproval rating\b'        # opinion level
+    - '(?i)\btreasury yield\b'         # a price, not a decision
+    - '(?i)\bhow many\b'               # counts
   page_size: 100
-  max_pages: 3                       # per tag slug
+  max_pages: 8                       # per tag slug; 'trump' returned exactly 300 events with 3 pages, so it was truncated
   min_days_to_end: 1.1               # need time left for at least the 24 h horizon
   max_days_to_end: 75                # deadlines inside the collection window, so labels arrive
   min_liquidity: 1000                # same thresholds as market_filters.yaml, applied at discovery
   min_volume: 1000
   min_price: 0.02                    # applied to NEW markets only; tracked markets stay tracked
   max_price: 0.98
-  max_markets_per_event: 4           # independent events > many sub-markets of one event
+  # Caps relaxed 2026-11-07 (originally 4 per event, 25 per deadline day, 300 stored, 300 tracked). A cap drops the
+  # least liquid markets BEFORE storage, so a dropped market can never be recovered, while storing one is cheap
+  # (a quote run takes ~0.25 s per market). The study scope is set by Layer 2 eligibility, not by caps, so the
+  # time-spread and correlated-bucket rules are applied at analysis time. Live dry run 2026-11-07 with no real caps:
+  # 434 markets / 222 events (caps 4/25: 107 / 61; caps 10/100: 198 / 118). The markets still dropped at 10/100 included
+  # eligible-looking storylines (pardons, cabinet departures, trade deals, FCC license, stock-trading ban).
+  # Revisit if stored markets approach 500 or quote runs approach 4 minutes. See docs/decisions_log.md.
+  max_markets_per_event: 100         # effectively none; storyline_id (event + subject) is assigned at analysis time
   # Measured 2026-11-04: 80% of candidates had deadline 31 Dec / 1 Jan. Their 24 h and 168 h cutoffs
-  # fall in one week, which a chronological split cannot separate. Cap per deadline date so shorter-dated
-  # markets keep their slots. Discuss with your supervisor; log the choice in docs/decisions_log.md.
-  max_markets_per_deadline_day: 25
-  max_markets_per_discovery: 300
-  max_tracked: 300                   # quotes are polled for at most this many open markets (about 5 min per run)
+  # fall in one week, which a chronological split cannot separate; handle this when building the split.
+  max_markets_per_deadline_day: 500  # effectively none
+  max_markets_per_discovery: 600
+  max_tracked: 600                   # must be >= max_markets_per_discovery, or the quote step trims the least liquid markets (measured 2026-11-06: ~0.25 s per market, 134 markets in ~34 s)
   refresh_version_seconds: 21600     # re-store unchanged metadata (volume/liquidity) every 6 h
   resolution_lookback_days: 60
   group_overrides: {}
 
 news:
-  # Tested live 2026-11-04. Summaries only (no full text); keep copyrighted text out of public Git.
+  # Tested live 2026-11-04 and 2026-11-06 (from a laptop). Summaries mostly; keep copyrighted text out of public Git
+  # (data/ is gitignored; the Axios feed carries ~5 kB bodies, probably full text, and is labelled feed_summary regardless).
+  # NPR was removed: it returned HTTP 403 to the Google Cloud VM's datacenter IP (2026-11-06). Datacenter IPs may be
+  # blocked by other sites too (government sites often are): after deploying, check `rss` failures on the VM and drop
+  # any feed that fails there. Query-based Google News feeds are NOT included yet: they need a code change first
+  # (the document source would be news.google.com for every article).
   rss_urls:
     - https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml
     - https://feeds.bbci.co.uk/news/world/rss.xml
-    - https://feeds.npr.org/1014/rss.xml
     - https://rss.politico.com/politics-news.xml
     - https://www.theguardian.com/us-news/us-politics/rss
     - https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml
     - https://thehill.com/feed/
     - https://www.federalreserve.gov/feeds/press_all.xml
+    # Official sources for executive-action markets (added 2026-11-07)
+    - https://www.whitehouse.gov/presidential-actions/feed/
+    - https://www.federalregister.gov/api/v1/documents.rss?conditions%5Btype%5D%5B%5D=PRESDOCU
+    - https://www.justice.gov/news/rss?type=press_release&m=1
+    - https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945&max=10
+    # Additional news feeds (added 2026-11-07); CNN politics was tested and is stale (newest item June)
+    - https://www.aljazeera.com/xml/rss/all.xml
+    - https://www.cbsnews.com/latest/rss/politics
+    - https://abcnews.go.com/abcnews/politicsheadlines
+    - https://api.axios.com/feed/
   # DRAFT event-specific queries; GDELT allows ~1 request / 5 s, so the collector spaces them.
   gdelt_queries:
     - '"government shutdown"'
