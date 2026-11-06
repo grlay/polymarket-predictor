@@ -23,17 +23,26 @@ profiles:
     window_days: 30
     entities: ["Rubio"]
     institution_terms: ["cabinet", "national security adviser", "shake-up", "shakeup"]
-    action_terms: ["resign*", "leav*", "exit*", "depart", "departs", "departure", "departing", "departed",
+    # Revised 2026-11-07 after a check on 546 VM documents: the bare prefix "leav*" matched incidental body text
+    # (a Cuba-sanctions piece), so it is replaced by phrases that say who leaves what.
+    action_terms: ["resign*", "exit*", "depart", "departs", "departure", "departing", "departed",
                    "step down", "steps down", "stepping down", "stepped down", "oust*", "fired", "firing",
-                   "replac*", "dismiss*", "quit", "quits", "quitting"]
+                   "replac*", "dismiss*", "quit", "quits", "quitting",
+                   "leave jobs", "leave their jobs", "leave his job", "leave his jobs", "leave office", "leaves office",
+                   "leaving office", "leave the administration", "leaving the administration", "leave the cabinet",
+                   "leaving the cabinet"]
 
   - id: iran_blockade_end
     subtype: executive_foreign_policy_announcement
     question_regex: '(?i)\b(Iran|Iranian)\b.*\bblockade\b|\bblockade\b.*\bIran'
     window_days: 30
-    # Tightened 2026-11-07 after a check on 252 stored documents: generic action terms (negotiat*, talks, deal,
-    # agreement, announce*, end) accepted two Iran-commentary pieces that were not about the blockade. The terms
-    # below name the blockade, the strait and shipping, or the act of lifting/reopening.
+    # Tightened twice on 2026-11-07, both times because of observed false positives:
+    #  1. 252 stored documents: generic action terms (negotiat*, talks, deal, agreement, announce*, end) accepted two
+    #     Iran-commentary pieces that were not about the blockade.
+    #  2. 546 VM documents: "ceasefire" (shared with the Russia-Ukraine story), "Strait" (a passing mention in a Hegseth
+    #     piece) and "lift" (lifting sanctions) accepted unrelated Axios articles. A document that is really about the
+    #     blockade contains the word "blockade" or names shipping/naval/Oman, so "lift" is redundant.
+    # Recall is low by design: only a few documents in the corpus say "blockade"; Iran-war commentary is not accepted.
     entities: ["Iran*", "Hormuz", "Tehran"]
-    institution_terms: ["blockade", "naval", "Navy", "ceasefire", "Oman", "Strait", "ports", "shipping", "tanker*"]
-    action_terms: ["lift", "lifts", "lifted", "lifting", "reopen*"]
+    institution_terms: ["blockade", "naval", "Navy", "Oman", "ports", "shipping", "tanker*"]
+    action_terms: ["reopen*"]

@@ -114,6 +114,20 @@ class GateTests(unittest.TestCase):
                          'no_institution_or_action')  # "department" must not count as the action "depart"
         self.assertEqual(self.reason(RUBIO, 'Fed minutes show the cabinet of governors split on rates'), 'no_entity')
 
+    def test_incidental_body_text_does_not_qualify_a_document(self):
+        """False positives seen on the 546 documents collected on the VM (all were accepted through one generic term)."""
+        self.assertEqual(self.reason(RUBIO, 'Rubio places additional sanctions on Cuba',
+                                     'The new measures leave Havana with fewer shipping options.'), 'no_institution_or_action')
+        self.assertEqual(self.reason(BLOCKADE, 'U.S., Russia and Ukraine to resume peace talks in Abu Dhabi next week',
+                                     'Witkoff also discussed Iran and a possible ceasefire; sanctions could be lifted.'),
+                         'no_institution_or_action')
+        self.assertEqual(self.reason(BLOCKADE, 'Why Pete Hegseth could fall through thin ice',
+                                     'The Iran war and the Strait of Hormuz crisis have strained the Pentagon.'),
+                         'no_institution_or_action')
+        # but a document that really discusses the blockade passes through its body
+        self.assertIsNone(self.reason(BLOCKADE, 'After midterm defeat, Trump faces mostly bad options in Iran',
+                                      'Options include ending the naval blockade or striking again.'))
+
     def test_blockade_relevant_and_irrelevant_documents(self):
         for title in ('Iran demands US lift naval blockade before talks resume',
                       'Strait of Hormuz reopening hinges on deal, Oman says',
