@@ -39,6 +39,32 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(row['available_at'],now)
         self.assertLess(row['published_at'],now)
 
+    @staticmethod
+    def feed(link, source=''):
+        return ('<rss><channel><item><title>Rubio dismisses reports</title><link>' + link + '</link>'
+                '<pubDate>Wed, 01 Jan 2025 00:00:00 GMT</pubDate><description>Text</description>' + source +
+                '</item></channel></rss>')
+
+    def sources(self, xml):
+        return [r['source'] for r in rss_records(xml, timestamp('2025-01-02T00:00:00Z'), 'ref')]
+
+    def test_google_news_item_is_attributed_to_its_publisher(self):
+        xml = self.feed('https://news.google.com/rss/articles/CBMi123',
+                        '<source url="https://www.nytimes.com">The New York Times</source>')
+        self.assertEqual(self.sources(xml), ['www.nytimes.com'])
+
+    def test_aggregator_item_without_a_usable_source_keeps_the_aggregator_host(self):
+        self.assertEqual(self.sources(self.feed('https://news.google.com/rss/articles/CBMi123')), ['news.google.com'])
+        for unusable in ('<source>The New York Times</source>', '<source url="javascript:alert(1)">x</source>',
+                         '<source url="">x</source>'):
+            with self.subTest(source=unusable):
+                self.assertEqual(self.sources(self.feed('https://news.google.com/rss/articles/CBMi123', unusable)),
+                                 ['news.google.com'])
+
+    def test_ordinary_feed_source_is_unchanged_even_with_a_source_element(self):
+        xml = self.feed('https://www.bbc.co.uk/news/a', '<source url="https://other.example">Other</source>')
+        self.assertEqual(self.sources(xml), ['www.bbc.co.uk'])
+
     def test_naive_timestamp_rejected(self):
         with self.assertRaises(ValueError):
             timestamp('2025-01-01')

@@ -131,11 +131,20 @@ def config_digest(cfg):
     return digest(portable(cfg))
 
 
+# Hand-written evidence profiles decide which documents an agent may see, so they belong to a forecast's identity.
+RELEVANCE_PROFILES = ROOT / 'configs' / 'relevance_profiles.yaml'
+
+
+def profiles_digest():
+    """Hash of the relevance-profile file (None if absent). Text-mode read keeps it identical on Windows and Linux."""
+    return digest(RELEVANCE_PROFILES.read_text(encoding='utf-8')) if RELEVANCE_PROFILES.exists() else None
+
+
 def forecast_identity(cfg):
-    """What determines a forecast: LLM settings, retrieval rules, mode. Split dates and paths are not part of it."""
+    """What determines a forecast: LLM settings, retrieval rules, evidence profiles, mode. Split dates and paths are not part of it."""
     llm = {k: v for k, v in cfg['llm'].items() if k not in OPERATIONAL_LLM}
     return {'mode': cfg['mode'], 'llm': llm, 'retrieval': cfg['retrieval'],
-            'lookback_days': cfg['dataset']['lookback_days']}
+            'lookback_days': cfg['dataset']['lookback_days'], 'relevance_profiles': profiles_digest()}
 
 
 def _fingerprint(paths):

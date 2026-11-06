@@ -14,6 +14,7 @@ mark importable packages. Configuration and documentation are separate from gene
 | configs/config.yaml | Main research paths, APIs, dates, horizons, retrieval, model, budgets, training and evaluation settings |
 | configs/live_pilot.yaml | Small, bounded real-source connectivity/ingestion experiment |
 | configs/market_filters.yaml | As-of liquidity/volume/category/price/rule filters |
+| configs/relevance_profiles.yaml | Hand-written evidence profiles per storyline (entities, institution/action terms, window); hashed into the forecast run identity |
 | configs/prompts/news_agent.md | Evidence analyst instructions and structured-output contract |
 | configs/prompts/base_rate_agent.md | Reference-class estimate without retrieved evidence or market price |
 | configs/prompts/verifier.md | Audit/revision instructions applied to drafts and the same evidence |
@@ -44,7 +45,7 @@ mark importable packages. Configuration and documentation are separate from gene
 | ingestion/gamma.py | Gamma market pages → explicit token mapping and versioned market metadata; selection audit |
 | ingestion/clob.py | Current order book → two-sided midpoint; explicit legacy history collector |
 | ingestion/data_api.py | Data v2 history/resolutions → grain-aware records, cursor checks and final binary labels |
-| ingestion/news.py | RSS/Atom or GDELT results → timestamped summaries/headlines with explicit content kinds |
+| ingestion/news.py | RSS/Atom or GDELT results → timestamped summaries/headlines with explicit content kinds; items from a known aggregator (Google News) are attributed to the publisher named in the `<source>` tag |
 | ingestion/social.py | Public Reddit feed or licensed JSONL export → social/evidence records |
 | ingestion/external.py | Economic/financial release CSV → versioned release evidence observed at import time |
 | db/schema.sql | Canonical relational schema, keys, references, constraints and lookup indexes |
@@ -55,6 +56,7 @@ mark importable packages. Configuration and documentation are separate from gene
 | dataset/leakage_checks.py | Evidence, price, metadata, labels and groups → fail-closed validity checks |
 | retrieval/embedder.py | Text → stateless sparse hashed vectors; no future vocabulary/IDF fitting |
 | retrieval/index.py | SQLite corpus + cutoff → eligible documents only |
+| retrieval/relevance.py | Question + document → House-control gate or a profile gate (entity AND institution/action term, inside the window); one rejection reason per document; a profiled market with no relevant evidence is refused before any LLM call |
 | retrieval/temporal_retriever.py | Eligible documents + question → ranked, deduplicated, source-capped evidence packet |
 | features/market_features.py | Eligible price/metadata history → lag movement, spread, missingness and liquidity/volume features |
 | features/text_features.py | Retrieved packet → auditable coverage/source/age features for analysis |
@@ -92,9 +94,9 @@ not use these extra features. Adding them changes the experiment and must be doc
 |---|---|
 | run_ingest.py | Run selected public collection stages; retain successes and failures separately |
 | import_data.py | Import licensed evidence/releases or explicitly reviewed archival table records |
-| build_dataset.py | Build and export strict as-of snapshots; `--at now` is a pilot mode |
+| build_dataset.py | Build and export strict as-of snapshots; `--at now` is a pilot mode; `--market-id ID...` builds only the named markets (an unknown id is an error) |
 | run_baselines.py | Produce market/50% forecasts without an LLM; fit market models only when labels/dates suffice |
-| run_agents.py | Run frozen agent/baseline comparisons with optional small pilot limit |
+| run_agents.py | Run frozen agent/baseline comparisons with optional small pilot limit; `--market-id ID...` forecasts only the named markets (applied before `--limit`; a requested market without a snapshot is reported as a failure) |
 | freeze_protocol.py | Hash configuration, prompts, code and protocol; refuse overwriting an existing freeze |
 | fit_calibrator.py | Fit models for one explicit forecast run; no test tuning |
 | run_eval.py | Score the untouched test cohort or explicitly labelled exploratory analysis |
@@ -112,6 +114,8 @@ not use these extra features. Adding them changes the experiment and must be doc
 | tests/test_models.py | Bayesian model numerical behavior and single-class logistic refusal |
 | tests/test_contracts.py | Chat adapter response fixture, cyclic pagination rejection and document-version preservation |
 | tests/test_pipeline.py | Complete integration: populate, build, forecast, resume, fit seven models and evaluate |
+| tests/test_profiled_relevance.py | Hand-written profiles: matching, term rules, gate reasons and their order, late-arrival and changed-content retrieval as of the cutoff, refusal without evidence |
+| tests/test_market_filter.py | `--market-id`: filtered build/forecast, unknown and missing markets, limit order, command-line options |
 | notebooks/eda.ipynb | Guided inspection of actual database coverage, timestamps and snapshot counts |
 | notebooks/results.ipynb | Load one experiment's manifest/scores; inspect comparisons and their limitations |
 

@@ -1,0 +1,39 @@
+# Evidence-relevance profiles (shared-spec Layer 3, stage 1: HAND-WRITTEN).
+#
+# One profile per storyline, written from the market QUESTION only (never from outcomes or prices) and matched to
+# every deadline variant of that storyline by `question_regex`. A document is accepted for a profiled market only if
+#   - it was published at or before the snapshot cutoff and inside the window,
+#   - it mentions at least one entity, and
+#   - it mentions at least one institution term or action term.
+# Each rejected document gets exactly one reason: after_cutoff, outside_window, no_entity, no_institution_or_action.
+# If no document is accepted, the forecast is skipped with `insufficient_relevant_evidence` and no LLM call is made.
+#
+# Term syntax: whole words, case-insensitive. A trailing * means "any word starting with this", for example
+# "resign*" matches resign, resigns, resignation. Use explicit forms where a prefix would match an unrelated word
+# ("depart*" would match "department", so "depart", "departs", ... are listed instead).
+#
+# These profiles are NOT validated yet: precision and recall have to be measured on a hand-labelled audit set before
+# they are described as a method. The file is hashed into the forecast run identity, so changing it starts a new
+# versioned run. Record every change in docs/decisions_log.md BEFORE looking at outcomes.
+version: 1
+profiles:
+  - id: rubio_departure
+    subtype: executive_personnel_departure
+    question_regex: '(?i)\bRubio\b.*\b(out|leave|leaves|left|exit|resign\w*)\b'
+    window_days: 30
+    entities: ["Rubio"]
+    institution_terms: ["cabinet", "national security adviser", "shake-up", "shakeup"]
+    action_terms: ["resign*", "leav*", "exit*", "depart", "departs", "departure", "departing", "departed",
+                   "step down", "steps down", "stepping down", "stepped down", "oust*", "fired", "firing",
+                   "replac*", "dismiss*", "quit", "quits", "quitting"]
+
+  - id: iran_blockade_end
+    subtype: executive_foreign_policy_announcement
+    question_regex: '(?i)\b(Iran|Iranian)\b.*\bblockade\b|\bblockade\b.*\bIran'
+    window_days: 30
+    # Tightened 2026-11-07 after a check on 252 stored documents: generic action terms (negotiat*, talks, deal,
+    # agreement, announce*, end) accepted two Iran-commentary pieces that were not about the blockade. The terms
+    # below name the blockade, the strait and shipping, or the act of lifting/reopening.
+    entities: ["Iran*", "Hormuz", "Tehran"]
+    institution_terms: ["blockade", "naval", "Navy", "ceasefire", "Oman", "Strait", "ports", "shipping", "tanker*"]
+    action_terms: ["lift", "lifts", "lifted", "lifting", "reopen*"]

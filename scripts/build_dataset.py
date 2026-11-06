@@ -11,11 +11,13 @@ def main():
     parser = argparse.ArgumentParser(description='Build strict point-in-time snapshots; no outcomes required.')
     parser.add_argument('--config', default='configs/config.yaml')
     parser.add_argument('--at', help='now or explicit timezone-aware cutoff; omitted uses configured horizons')
+    parser.add_argument('--market-id', nargs='+', metavar='ID',
+                        help='build snapshots only for these market ids (an unknown id is an error)')
     args = parser.parse_args()
     cfg = load_config(args.config)
     con = connect(cfg['database'])
     at = utcnow() if args.at == 'now' else (timestamp(args.at) if args.at else None)
-    result = build(con, cfg, at)
+    result = build(con, cfg, at, market_ids=args.market_id)
     target = Path(cfg['data_dir'])/'processed'
     target.mkdir(parents=True, exist_ok=True)
     frame(con, pilot=None).to_csv(target/'snapshots.csv', index=False)

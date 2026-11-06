@@ -13,10 +13,13 @@ def main():
     parser.add_argument('--config', default='configs/config.yaml')
     parser.add_argument('--limit', type=int, help='Pilot limit: the NEWEST N snapshots still eligible for a live forecast '
                         '(old ones are skipped, not failed). Selection never uses outcomes or prices.')
+    parser.add_argument('--market-id', nargs='+', metavar='ID',
+                        help='forecast only snapshots of these market ids (applied before --limit); '
+                             'a requested market without a snapshot is reported as a failure')
     args = parser.parse_args()
     cfg = load_config(args.config)
     con = connect(cfg['database'])
-    result = run_agents(con, frame(con, pilot=None), cfg, limit=args.limit)
+    result = run_agents(con, frame(con, pilot=None), cfg, limit=args.limit, market_ids=args.market_id)
     write_json(Path(cfg['artifact_dir'])/'agents_latest.json', result)
     print(json.dumps(result, indent=2))
     con.close()

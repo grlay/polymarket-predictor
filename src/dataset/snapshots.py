@@ -44,10 +44,21 @@ def make_snapshot(con, market, cutoff, cfg, filters, pilot=False):
     return snap
 
 
-def build(con, cfg, at=None):
+def build(con, cfg, at=None, market_ids=None):
+    """Build snapshots. market_ids restricts the build to those markets; an unknown id is an error, not a skip."""
     filters = yaml.safe_load(Path(cfg['market_filters']).read_text())
+    wanted = None
+    if market_ids is not None:
+        wanted = {str(m) for m in market_ids}
+        if not wanted:
+            raise ValueError('market_ids is empty')
+        unknown = sorted(wanted - {r['market_id'] for r in rows(con, 'SELECT market_id FROM markets')})
+        if unknown:
+            raise ValueError('Unknown market_id(s): ' + ', '.join(unknown))
     total, excluded = 0, []
     for market in rows(con, 'SELECT * FROM markets ORDER BY market_id'):
+        if wanted is not None and market['market_id'] not in wanted:
+            continue
         if at is not None:
             cutoffs = [timestamp(at)]
         else:
@@ -74,7 +85,8 @@ def build(con, cfg, at=None):
                 total += 1
             except ValueError as exc:
                 excluded.append({'market_id': market['market_id'], 'cutoff': cutoff, 'reason': str(exc)})
-    event(con, 'build_dataset', 'complete', {'eligible': total, 'excluded': excluded})
+    event(con, 'build_dataset', 'complete', {'eligible': total, 'excluded': excluded,
+                                             'market_filter': sorted(wanted) if wanted is not None else None})
     return {'eligible': total, 'excluded': excluded}
 
 

@@ -77,7 +77,23 @@ def forecast_all(client, cfg, context, context_ns, outputs):
     outputs['multi_no_social'] = verifier.forecast(client, context_ns, [news_ns, outputs['base_rate_agent']], cfg)
 
 
-def run_agents(con, data, cfg, limit=None):
+def run_agents(con, data, cfg, limit=None, market_ids=None):
+    """Forecast snapshots. market_ids restricts the run to those markets (applied before limit).
+
+    A requested market with no snapshot is reported as a failure and the others still run; if none of the requested
+    markets has a snapshot the run stops with an error. Selection never looks at prices or outcomes.
+    """
+    requested_failures = []
+    if market_ids is not None:
+        wanted = {str(m) for m in market_ids}
+        if not wanted:
+            raise ValueError('market_ids is empty')
+        present = set(data.market_id.astype(str)) if not data.empty else set()
+        for missing in sorted(wanted - present):
+            requested_failures.append(dict(market_id=missing, error='NoSnapshot: no snapshot exists for this market'))
+        data = data[data.market_id.astype(str).isin(wanted)] if not data.empty else data
+        if data.empty:
+            raise ValueError('No snapshots for the requested market ids: ' + ', '.join(sorted(wanted)))
     if data.empty:
         raise ValueError('No snapshots to forecast')
     kinds = set(data.source_kind)
@@ -98,7 +114,9 @@ def run_agents(con, data, cfg, limit=None):
         write_json(Path(cfg['artifact_dir'])/run_id[:12]/'run_metadata.json',
             {'run_id': run_id, 'code_hash': code_hash, 'prompt_hash': prompt_hash,
              'config_hash': identity, 'runtime': runtime_info(), 'created_at': utcnow()})
-    failures = []
+    failures = list(requested_failures)
+    for failure in requested_failures:
+        event(con, 'agents', 'failed', failure)
     now = utcnow()
     counts = dict(con.execute("SELECT snapshot_id, COUNT(*) FROM forecasts WHERE run_id=? AND status='ok' "
                               "GROUP BY snapshot_id", (run_id,)).fetchall())
@@ -184,5 +202,6 @@ def run_agents(con, data, cfg, limit=None):
         failures.append(failure)
         event(con, 'agents', 'failed', failure)
     return dict(run_id=run_id, calls=client.calls, cache_hits=client.cache_hits, failures=failures,
+                market_ids=sorted(str(m) for m in market_ids) if market_ids is not None else None,
                 skipped_stale=skipped_stale, prompt_tokens=client.prompt_tokens,
                 completion_tokens=client.completion_tokens, response_models=sorted(client.response_models))

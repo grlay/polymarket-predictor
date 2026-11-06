@@ -27,6 +27,24 @@ def plain(text):
     return unescape(' '.join(parser.parts)).strip()
 
 
+# Aggregator feeds link to the aggregator, not the publisher. The publisher is named in an RSS <source url="...">
+# element. Only listed aggregators are re-attributed, so every ordinary feed keeps its link host unchanged.
+AGGREGATOR_HOSTS = {'news.google.com'}
+
+
+def publisher_host(url, fields):
+    """Host used as the document source: the link host, or the publisher for a known aggregator."""
+    host = urlsplit(url).netloc
+    if host not in AGGREGATOR_HOSTS:
+        return host
+    node = fields.get('source')
+    if node is not None:
+        origin = urlsplit(node.get('url') or '')
+        if origin.scheme in ('http', 'https') and origin.netloc:
+            return origin.netloc
+    return host
+
+
 def rss_records(xml, observed, ref):
     root = ET.fromstring(xml)
     for item in list(root.findall('.//item')) + list(root.findall('{http://www.w3.org/2005/Atom}entry')):
@@ -50,7 +68,7 @@ def rss_records(xml, observed, ref):
             continue
         body = plain(value('description') or value('summary') or value('content'))
         yield dict(url=url, title=plain(value('title')), body=body,
-                   source=urlsplit(url).netloc, source_type='news', published_at=published,
+                   source=publisher_host(url, fields), source_type='news', published_at=published,
                    available_at=observed, observed_at=observed, provenance='prospective',
                    raw_ref=ref, source_kind='real', content_kind='feed_summary' if body else 'headline')
 
