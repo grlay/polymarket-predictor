@@ -1,0 +1,13 @@
+# PILOT ONLY. Used through configs/config_pilot.yaml for hand-chosen demonstration forecasts (pilot-mode snapshots).
+# Identical to market_filters.yaml except that the price band is wider. A near-certain market (Rubio about 0.03) can
+# dip below 0.02 at the cutoff and would silently lose its snapshot under the research filter. The research filter
+# is deliberately left untouched so the research population definition never changes because of one market's price.
+# Pilot snapshots carry mode "prospective_pilot" and are excluded from fitting and evaluation (protocol item 3).
+categories: []
+min_liquidity: 1000
+min_volume: 1000
+min_price: 0.005
+max_price: 0.995
+exclude_question_patterns:
+  - '(?i)up or down.*(5|15) min'
+require_open: true

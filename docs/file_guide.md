@@ -14,6 +14,8 @@ mark importable packages. Configuration and documentation are separate from gene
 | configs/config.yaml | Main research paths, APIs, dates, horizons, retrieval, model, budgets, training and evaluation settings |
 | configs/live_pilot.yaml | Small, bounded real-source connectivity/ingestion experiment |
 | configs/market_filters.yaml | As-of liquidity/volume/category/price/rule filters |
+| configs/config_pilot.yaml | Pilot copy of config.yaml (wider price filter, concurrency 2, budget 200); same run identity; for hand-chosen demonstration forecasts with `--at` and `--market-id` only |
+| configs/market_filters_pilot.yaml | Research filter with a wider price band (0.005-0.995); pilot snapshots only |
 | configs/relevance_profiles.yaml | Hand-written evidence profiles per storyline (entities, institution/action terms, window); hashed into the forecast run identity |
 | configs/prompts/news_agent.md | Evidence analyst instructions and structured-output contract |
 | configs/prompts/base_rate_agent.md | Reference-class estimate without retrieved evidence or market price |
@@ -115,6 +117,7 @@ not use these extra features. Adding them changes the experiment and must be doc
 | tests/test_contracts.py | Chat adapter response fixture, cyclic pagination rejection and document-version preservation |
 | tests/test_pipeline.py | Complete integration: populate, build, forecast, resume, fit seven models and evaluate |
 | tests/test_profiled_relevance.py | Hand-written profiles: matching, term rules, gate reasons and their order, late-arrival and changed-content retrieval as of the cutoff, refusal without evidence |
+| tests/test_pilot_config.py | The pilot config differs from the research config in exactly the intended keys and keeps the same forecast run identity |
 | tests/test_market_filter.py | `--market-id`: filtered build/forecast, unknown and missing markets, limit order, command-line options |
 | notebooks/eda.ipynb | Guided inspection of actual database coverage, timestamps and snapshot counts |
 | notebooks/results.ipynb | Load one experiment's manifest/scores; inspect comparisons and their limitations |

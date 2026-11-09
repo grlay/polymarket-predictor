@@ -54,7 +54,8 @@ llm:
   k: 3
   k_temperature: 0.7             # repeated-call baseline must sample, or its calls are identical
   reasoning_effort: null         # low | medium | high for thinking models (Gemini 3.8 Flash cannot disable thinking)
-  retries: 3                     # HTTP 429/5xx and network failures
+  retries: 6                     # HTTP 429/5xx and network failures (operational: not part of run identity)
+  retry_wait_seconds: 5          # exponential backoff 5,10,20,40,60,60 s (about 195 s); operational
   format_retries: 2              # unusable JSON / invented citations / truncated output
   concurrency: 1                 # snapshots forecast in parallel (watch provider rate limits)
 training:
