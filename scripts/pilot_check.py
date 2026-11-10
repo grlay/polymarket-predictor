@@ -51,9 +51,11 @@ def main() -> int:
               f'after cutoff {span}  horizon {hz or "-"}')
         if model in expected and market in expected[model] and len(ok) != SYSTEMS:
             problems.append(f'{model} {NAMES.get(market, market)} {len(ok)}/{SYSTEMS}')
+        # generated_at is when a row was written, i.e. when its snapshot FINISHED. The 900 s rule applies to the
+        # START of generation (orchestrator.too_old), so a late finish is reported, not flagged.
         late = [d for d in delays if d > WINDOW_SECONDS]
         if late:
-            problems.append(f'{model} {NAMES.get(market, market)}: {len(late)} rows after {WINDOW_SECONDS} s')
+            print(f'    note: {len(late)} rows finished after {WINDOW_SECONDS} s (allowed: the limit is on the start)')
 
     for name in ('lite', 'ref', 'deepseek'):
         log = Path(f'artifacts/research/pilot_{name}.log')
