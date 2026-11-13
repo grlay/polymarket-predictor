@@ -1,0 +1,2 @@
+# Retrospective outputs are stored byte-for-byte (no line-ending conversion) so their sha256 matches the VM.
+retrospective/*.csv -text
