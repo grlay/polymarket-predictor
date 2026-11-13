@@ -4,8 +4,14 @@ Read-only public GETs (Polymarket Gamma and CLOB), at most one request every 2 s
 (`outcomePrices`, `umaResolutionStatus`, winner flags): selection uses only titles, questions, deadlines and prices that
 were public at the cutoffs. Raw responses are saved under data/retro/raw/ (git-ignored) so every row can be traced.
 
-    python -m retrospective.select_markets events   # page closed events, classify, list candidate markets
-    python -m retrospective.select_markets prices   # YES price at both cutoffs, band check, write selection.csv
+    python -m retrospective.select_markets events     # page closed events, classify, list candidate markets
+    python -m retrospective.select_markets classify   # same classification from the saved pages, no requests
+    python -m retrospective.select_markets prices     # YES price at both cutoffs, band check, write selection.csv
+
+Event rule (decisions log, 2026-11-13): broad title rules first, then an event is kept only if its title is exactly one
+of the race-winner titles in EXACT; other broadly kept events are dropped with a reason from REFINED_DROPS. Deadline rule
+(same date): a market's deadline is its EVENT's end date; the market's own end date is recorded but not used, because it
+is blank for most markets and inconsistent for others (e.g. 2025-07-11 on House-control markets).
 
 Outputs (retrospective/, committed so the Git time proves they predate any label):
     events_classified.csv   every event returned, kept or dropped, with the rule that decided it
@@ -51,6 +57,21 @@ RULES = [
     ('keep', 'senate_race', rf'(?i)\b({STATES})\b.*\bsenate\b|\bsenate\b.*\b({STATES})\b'),
     ('keep', 'governor_race', rf'(?i)\b({STATES})\b.*\bgovern(or|atorial)\b|\bgovern(or|atorial)\b.*\b({STATES})\b'),
 ]
+# Refinement (2026-11-13, after a title-only review): one kept event = one race-winner question.
+EXACT = {
+    'national_control': r'(Which party will win the (House|Senate) in 2026\?|Balance of Power: 2026 Midterms)',
+    'senate_race': rf'({STATES}) Senate Election Winner',
+    'governor_race': rf'({STATES}) Governor Election Winner',
+}
+# Reason for a broadly kept event that is not an exact race-winner title. First match decides; else 'other'.
+REFINED_DROPS = [
+    ('county', r'(?i)\bcounty\b'),
+    ('combo', r'(?i)\bcombo\b'),
+    ('state_legislature', r'(?i)\bstate (senate|house|legislature)\b'),
+    ('lieutenant_governor', r'(?i)\blieutenant\b|\blt\.? gov'),
+    ('runoff_threshold', r'(?i)\boutright\b|\brunoff\b|\bfirst round\b'),
+    ('price_defined', r'(?i)\bodds\b|\bfavorite\b|\bflips?\b|\bretakes?\b'),
+]
 LOG = []
 
 
@@ -82,10 +103,15 @@ def norm_end(value):
 
 
 def classify(title):
-    for action, rule, pattern in RULES:
-        if re.search(pattern, title):
-            return action, rule
-    return 'drop', 'not_in_scope'
+    """Returns (action, rule, broad_rule). broad_rule is the decision of the first-pass RULES."""
+    broad = next(((a, r) for a, r, p in RULES if re.search(p, title)), ('drop', 'not_in_scope'))
+    if broad[0] != 'keep':
+        return broad[0], broad[1], broad[1]
+    clean = ' '.join(title.split())
+    if re.fullmatch(EXACT[broad[1]], clean):
+        return 'keep', broad[1], broad[1]
+    reason = next((r for r, p in REFINED_DROPS if re.search(p, clean)), 'other')
+    return 'drop', reason, broad[1]
 
 
 def cluster(rule, event_id):
@@ -111,27 +137,44 @@ def stage_events():
         if not page or not cursor:
             break
         page_no += 1
+    process(events)
+
+
+def stage_classify():
+    """Re-run the classification on the pages saved by `events` (no network requests)."""
+    pages = sorted((RAW / 'gamma').glob('events_*.json.gz'))
+    if not pages:
+        raise SystemExit(f'no saved pages in {RAW / "gamma"}; run the events stage first')
+    events = []
+    for p in pages:
+        events += json.loads(gzip.decompress(p.read_bytes()).decode('utf-8')).get('events') or []
+    print(f'{len(pages)} saved pages, {len(events)} events', flush=True)
+    process(events)
+
+
+def process(events):
     ids = [e['id'] for e in events]
     if len(ids) != len(set(ids)):
         raise SystemExit(f'duplicate events across pages: {len(ids) - len(set(ids))}')
     rows, candidates = [], []
     for e in events:
-        action, rule = classify(e.get('title') or '')
+        action, rule, broad = classify(e.get('title') or '')
         rows.append({'event_id': e['id'], 'title': e.get('title'), 'n_markets': len(e.get('markets') or []),
-                     'action': action, 'rule': rule})
+                     'end_date': norm_end(e.get('endDate')), 'action': action, 'rule': rule, 'broad_rule': broad})
         if action != 'keep':
             continue
+        deadline = norm_end(e.get('endDate'))     # the event's end date is the deadline (see module docstring)
         for m in e.get('markets') or []:
             outcomes = json.loads(m.get('outcomes') or '[]')
             tokens = json.loads(m.get('clobTokenIds') or '[]')
             reason = ''
             if sorted(outcomes) != ['No', 'Yes'] or len(tokens) != 2:
                 reason = 'not_yes_no'
-            elif norm_end(m.get('endDate')) != DEADLINE:
+            elif deadline != DEADLINE:
                 reason = 'different_deadline'
             candidates.append({'market_id': str(m['id']), 'event_id': e['id'], 'event_title': e.get('title'),
                                'rule': rule, 'cluster': cluster(rule, e['id']), 'question': m.get('question'),
-                               'end_date': norm_end(m.get('endDate')),
+                               'end_date': deadline, 'market_end_date': norm_end(m.get('endDate')),
                                'yes_token': tokens[outcomes.index('Yes')] if not reason or reason == 'different_deadline' else '',
                                'pre_price_exclusion': reason})
     write_csv(ROOT / 'events_classified.csv', rows)
@@ -151,6 +194,19 @@ def stage_events():
     usable = sum(not c['pre_price_exclusion'] for c in candidates)
     print('events %d; kept %d (%s); candidate markets %d; usable %d'
           % (len(events), len(kept), by_rule, len(candidates), usable))
+    refined = [r for r in rows if r['action'] == 'drop' and r['broad_rule'] in EXACT]
+    print('broadly kept %d; dropped by the refinement %d: %s' % (len(kept) + len(refined), len(refined), ', '.join(
+        '%s %d' % (k, sum(r['rule'] == k for r in refined)) for k in [n for n, _ in REFINED_DROPS] + ['other'])))
+    excl = {}
+    for c in candidates:
+        excl[c['pre_price_exclusion'] or 'none'] = excl.get(c['pre_price_exclusion'] or 'none', 0) + 1
+    print('pre-price exclusions:', ', '.join(f'{k} {v}' for k, v in sorted(excl.items())))
+    odd = {}
+    for c in candidates:
+        if c['market_end_date'] != c['end_date']:
+            odd[c['market_end_date'] or 'blank'] = odd.get(c['market_end_date'] or 'blank', 0) + 1
+    print('market end date differs from the event deadline (recorded, not used):',
+          ', '.join(f'{k} {v}' for k, v in sorted(odd.items())) or 'none')
 
 
 def price_at(token, cutoff_iso, tag):
@@ -170,7 +226,8 @@ def stage_prices():
     candidates = json.loads((RAW / 'candidates.json').read_text(encoding='utf-8'))
     rows = []
     for c in candidates:
-        row = {k: c[k] for k in ('market_id', 'event_id', 'event_title', 'rule', 'cluster', 'question', 'end_date')}
+        row = {k: c[k] for k in ('market_id', 'event_id', 'event_title', 'rule', 'cluster', 'question', 'end_date',
+                                 'market_end_date')}
         row['pre_price_exclusion'] = c['pre_price_exclusion']
         for label, cutoff in CUTOFFS.items():
             price, age, reason = (None, None, c['pre_price_exclusion']) if c['pre_price_exclusion'] else \
@@ -203,11 +260,13 @@ def write_csv(path, rows):
 
 if __name__ == '__main__':
     stage = sys.argv[1] if len(sys.argv) > 1 else ''
-    if stage not in ('events', 'prices'):
+    stages = {'events': stage_events, 'classify': stage_classify, 'prices': stage_prices}
+    if stage not in stages:
         raise SystemExit(__doc__)
     try:
-        stage_events() if stage == 'events' else stage_prices()
+        stages[stage]()
     finally:
-        log = RAW / f'request_log_{stage}.json'
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(json.dumps(LOG, indent=1), encoding='utf-8')
+        if stage != 'classify':     # classify makes no requests; keep the events request log intact
+            log = RAW / f'request_log_{stage}.json'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(json.dumps(LOG, indent=1), encoding='utf-8')
