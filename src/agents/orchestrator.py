@@ -14,6 +14,7 @@ from src.retrieval.relevance import require_relevant_evidence
 
 SYSTEMS = ['news_agent', 'base_rate_agent', 'llm_no_retrieval', 'single_agent_rag',
            'single_agent_kx', 'multi_unverified', 'multi_verified', 'multi_no_social']
+NO_EVIDENCE_SYSTEMS = {'llm_no_retrieval', 'base_rate_agent'}   # never shown documents
 
 # Expected, loggable failures. Programming errors (TypeError, AttributeError, ...) are NOT in this list on
 # purpose: they must stop the run loudly instead of being recorded as "the forecast failed".
@@ -62,8 +63,35 @@ def plan(rows, finished, cfg, now, limit=None):
     return ready, skipped
 
 
-def forecast_all(client, cfg, context, context_ns, outputs):
-    """All systems for one snapshot. Fills `outputs` progressively so partial results survive a failure."""
+def forecast_all(client, cfg, context, context_ns, outputs, systems=None):
+    """All systems (or the requested subset) for one snapshot. Fills `outputs` progressively so partial results
+    survive a failure. The two drafts are produced whenever a multi-agent system that combines them is requested."""
+    if systems is not None:
+        wanted = set(systems)
+        if wanted & {'multi_unverified', 'multi_verified', 'multi_no_social'}:
+            wanted |= {'news_agent', 'base_rate_agent'}
+        if 'news_agent' in wanted:
+            outputs['news_agent'] = news_agent.forecast(client, context, cfg)
+        if 'base_rate_agent' in wanted:
+            outputs['base_rate_agent'] = base_rate_agent.forecast(client, context, cfg)
+        if 'llm_no_retrieval' in wanted:
+            outputs['llm_no_retrieval'] = llm_no_retrieval.forecast(client, context, cfg)
+        if 'single_agent_rag' in wanted:
+            outputs['single_agent_rag'] = single_agent_rag.forecast(client, context, cfg)
+        if 'single_agent_kx' in wanted:
+            outputs['single_agent_kx'] = single_agent_kx.forecast(client, context, cfg)
+        if wanted & {'multi_unverified', 'multi_verified'}:
+            drafts = [outputs['news_agent'], outputs['base_rate_agent']]
+            if 'multi_unverified' in wanted:
+                outputs['multi_unverified'] = dict(probability=sum(d['probability'] for d in drafts)/2,
+                    evidence_ids=outputs['news_agent']['evidence_ids'], rationale='Equal-weight independent agent mean.',
+                    flags=[])
+            if 'multi_verified' in wanted:
+                outputs['multi_verified'] = verifier.forecast(client, context, drafts, cfg)
+        if 'multi_no_social' in wanted:
+            news_ns = news_agent.forecast(client, context_ns, cfg)
+            outputs['multi_no_social'] = verifier.forecast(client, context_ns, [news_ns, outputs['base_rate_agent']], cfg)
+        return
     outputs['news_agent'] = news_agent.forecast(client, context, cfg)
     outputs['base_rate_agent'] = base_rate_agent.forecast(client, context, cfg)
     outputs['llm_no_retrieval'] = llm_no_retrieval.forecast(client, context, cfg)
@@ -77,12 +105,22 @@ def forecast_all(client, cfg, context, context_ns, outputs):
     outputs['multi_no_social'] = verifier.forecast(client, context_ns, [news_ns, outputs['base_rate_agent']], cfg)
 
 
-def run_agents(con, data, cfg, limit=None, market_ids=None):
+def run_agents(con, data, cfg, limit=None, market_ids=None, systems=None):
     """Forecast snapshots. market_ids restricts the run to those markets (applied before limit).
+
+    systems: run only these systems (default: all). If none of them reads documents (`llm_no_retrieval` alone),
+    no retrieval is done and the evidence requirement does not apply; a snapshot counts as finished when every
+    requested system has a forecast in this run (decisions log R10: replay run 1 = llm_no_retrieval only).
 
     A requested market with no snapshot is reported as a failure and the others still run; if none of the requested
     markets has a snapshot the run stops with an error. Selection never looks at prices or outcomes.
     """
+    if systems is not None:
+        systems = list(dict.fromkeys(systems))
+        unknown = sorted(set(systems) - set(SYSTEMS))
+        if not systems or unknown:
+            raise ValueError('Unknown or empty systems: ' + ', '.join(unknown))
+    needs_evidence = systems is None or bool(set(systems) - NO_EVIDENCE_SYSTEMS)
     requested_failures = []
     if market_ids is not None:
         wanted = {str(m) for m in market_ids}
@@ -120,7 +158,14 @@ def run_agents(con, data, cfg, limit=None, market_ids=None):
     now = utcnow()
     counts = dict(con.execute("SELECT snapshot_id, COUNT(*) FROM forecasts WHERE run_id=? AND status='ok' "
                               "GROUP BY snapshot_id", (run_id,)).fetchall())
-    finished = {sid for sid, n in counts.items() if n == len(SYSTEMS)}
+    if systems is None:
+        finished = {sid for sid, n in counts.items() if n == len(SYSTEMS)}
+    else:
+        done = {}
+        for sid, system in con.execute("SELECT snapshot_id, system FROM forecasts WHERE run_id=? AND status='ok'",
+                                       (run_id,)).fetchall():
+            done.setdefault(sid, set()).add(system)
+        finished = {sid for sid, got in done.items() if set(systems) <= got}
     ready, skipped_stale = plan(data.to_dict('records'), finished, cfg, now, limit)
 
     # Phase 1 (main thread: database reads) - freeze evidence and decide admissibility.
@@ -128,10 +173,13 @@ def run_agents(con, data, cfg, limit=None, market_ids=None):
     for snapshot in ready:
         cutoff = int(snapshot['cutoff'])
         try:
-            docs = retrieve(con, snapshot, cfg)
-            no_social_docs = retrieve(con, snapshot, cfg, include_social=False)
-            check_evidence(docs, cutoff, snapshot['source_kind'])
-            require_relevant_evidence(snapshot, docs)
+            if needs_evidence:
+                docs = retrieve(con, snapshot, cfg)
+                no_social_docs = retrieve(con, snapshot, cfg, include_social=False)
+                check_evidence(docs, cutoff, snapshot['source_kind'])
+                require_relevant_evidence(snapshot, docs)
+            else:
+                docs, no_social_docs = [], []
             if snapshot['source_kind'] != 'synthetic':
                 if too_old(cutoff, cfg, now):  # only reachable when retrospective mode is allowed
                     frozen = cfg['llm'].get('model_frozen_before')
@@ -159,7 +207,7 @@ def run_agents(con, data, cfg, limit=None, market_ids=None):
                 and too_old(snapshot['cutoff'], cfg, utcnow())):
             return outputs, 'stale'  # waited too long in the queue; the freshness window is enforced at generation time
         try:
-            forecast_all(client, cfg, context, context_ns, outputs)
+            forecast_all(client, cfg, context, context_ns, outputs, systems)
         except BudgetExhausted:
             return outputs, 'budget'
         except EXPECTED_FAILURES as exc:
@@ -203,5 +251,6 @@ def run_agents(con, data, cfg, limit=None, market_ids=None):
         event(con, 'agents', 'failed', failure)
     return dict(run_id=run_id, calls=client.calls, cache_hits=client.cache_hits, failures=failures,
                 market_ids=sorted(str(m) for m in market_ids) if market_ids is not None else None,
+                systems=systems,
                 skipped_stale=skipped_stale, prompt_tokens=client.prompt_tokens,
                 completion_tokens=client.completion_tokens, response_models=sorted(client.response_models))

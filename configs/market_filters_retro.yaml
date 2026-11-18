@@ -1,0 +1,13 @@
+# REPLAY ONLY (configs/config_retro.yaml, decisions log R10). Identical to market_filters.yaml except that the
+# liquidity and volume minimums are 0: their values at the past cutoffs are unknown (Gamma shows today's totals,
+# which include election-night trading). The selection (13 Nov) already applied the same 0.02-0.98 band and 900 s rule.
+# Apply only to metadata observed at or before each cutoff.
+# Empty categories means all; narrow after the pilot and freeze the protocol.
+categories: []
+min_liquidity: 0
+min_volume: 0
+min_price: 0.02
+max_price: 0.98
+exclude_question_patterns:
+  - '(?i)up or down.*(5|15) min'
+require_open: true

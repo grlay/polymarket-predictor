@@ -16,10 +16,12 @@ def main():
     parser.add_argument('--market-id', nargs='+', metavar='ID',
                         help='forecast only snapshots of these market ids (applied before --limit); '
                              'a requested market without a snapshot is reported as a failure')
+    parser.add_argument('--systems', nargs='+', metavar='SYSTEM',
+                        help='run only these systems (default all); llm_no_retrieval alone needs no documents')
     args = parser.parse_args()
     cfg = load_config(args.config)
     con = connect(cfg['database'])
-    result = run_agents(con, frame(con, pilot=None), cfg, limit=args.limit, market_ids=args.market_id)
+    result = run_agents(con, frame(con, pilot=None), cfg, limit=args.limit, market_ids=args.market_id, systems=args.systems)
     write_json(Path(cfg['artifact_dir'])/'agents_latest.json', result)
     print(json.dumps(result, indent=2))
     con.close()

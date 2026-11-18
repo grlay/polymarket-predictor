@@ -1,0 +1,79 @@
+# REPLAY CONFIG (decisions log R1, R2, R10; 2026-11-19): the 2026 midterm replay (validation set, never pooled with live).
+# Identical to config.yaml except: separate database and folders; mode retrospective; research price band without
+# liquidity/volume minimums (not known at the cutoff); model pinned to gemini-3.5-flash-lite (knowledge cutoff March
+# 2026) with model_frozen_before 2026-03-31 and allow_retrospective true; call budget sized to one free-tier day.
+#   python -m retrospective.build_retro_db                     (B3: offline, from files saved on 13 Nov)
+#   python -m scripts.build_dataset --config configs/config_retro.yaml   (B7: cutoffs 168 h and 24 h from the deadline)
+#   python -m scripts.run_agents --config configs/config_retro.yaml --systems llm_no_retrieval   (run 1)
+project: HX2605
+seed: 2605
+data_dir: data/retro
+artifact_dir: artifacts/retro
+database: data/retro/retro.sqlite
+mode: retrospective
+market_filters: configs/market_filters_retro.yaml
+http:
+  timeout_seconds: 12
+  retries: 2
+  min_interval_seconds: 0.25
+  user_agent: HX2605-academic-research/0.1
+polymarket:
+  gamma_base: https://gamma-api.polymarket.com
+  clob_base: https://clob.polymarket.com
+  data_base: https://data-api.polymarket.com/v2
+  history_backend: v2
+  max_markets: 30
+  page_size: 100
+  max_pages: 5
+  discovery_order: volume24hr
+  group_overrides: {}
+  history_days: 7
+news:
+  rss_urls:
+    - https://feeds.bbci.co.uk/news/world/rss.xml
+    - https://www.federalreserve.gov/feeds/press_all.xml
+  gdelt_queries: []
+social:
+  subreddits: []
+dataset:
+  horizons_hours: [24, 168]
+  max_price_age_seconds: 900     # the market benchmark must be as fresh as the evidence
+  lookback_days: 30
+  start: null
+  end: null
+retrieval:
+  top_k: 8
+  min_score: 0.01
+  max_per_domain: 2
+  max_chars: 1800
+  include_social: true
+llm:
+  provider: chat_completions
+  model: gemini-3.5-flash-lite      # R2; pinned here so it is part of the run identity
+  model_frozen_before: '2026-03-31T23:59:59Z'  # end of the documented knowledge-cutoff month, March 2026 (R2)
+  temperature: 0
+  max_output_tokens: 8192        # thinking models count reasoning tokens against this cap
+  max_calls_per_run: 450         # free tier 500 requests/day; leaves room for retries
+  timeout_seconds: 60
+  allow_retrospective: true      # past cutoffs; guarded by model_frozen_before
+  max_forecast_delay_seconds: 900
+  prompt_dir: configs/prompts
+  k: 3
+  k_temperature: 0.7             # repeated-call baseline must sample, or its calls are identical
+  reasoning_effort: null         # low | medium | high for thinking models (Gemini 3.8 Flash cannot disable thinking)
+  retries: 6                     # HTTP 429/5xx and network failures (operational: not part of run identity)
+  retry_wait_seconds: 5          # exponential backoff 5,10,20,40,60,60 s (about 195 s); operational
+  format_retries: 2              # unusable JSON / invented citations / truncated output
+  concurrency: 1                 # snapshots forecast in parallel (watch provider rate limits)
+training:
+  train_end: null
+  validation_end: null
+  min_train_groups: 30
+  min_validation_groups: 10
+  regularization_grid: [0.1, 1.0, 10.0]
+  bayesian_prior_sd: 1.0
+evaluation:
+  bootstrap_samples: 2000
+  calibration_bins: 5
+  log_loss_epsilon: 0.000001
+  primary_system: hybrid_verified
