@@ -163,6 +163,13 @@ def stage_parse(raw=RAW, out=OUT):
         captured = wb_time(rec['served'])
         try:
             xml = gzip.decompress((raw / rec['path']).read_bytes())
+            # Some sites send their feed gzip-compressed; Wayback's raw (id_) form returns those bytes unchanged and
+            # urllib does not undo the content encoding. Unpacking is reading the capture, not repairing it (R12a).
+            unpacked = 0
+            while xml[:2] == b'\x1f\x8b' and unpacked < 3:
+                xml, unpacked = gzip.decompress(xml), unpacked + 1
+            if unpacked:
+                r['captures_content_gzip'] += 1
             items = list(rss_records(xml, captured, ref=f"{rec['path']} {rec['url']}"))
         except Exception as exc:          # an archived HTML error page or broken XML: count it, never guess
             r['capture_unparsable_' + type(exc).__name__] += 1

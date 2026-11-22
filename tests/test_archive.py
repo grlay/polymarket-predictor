@@ -69,6 +69,14 @@ class ParseTests(unittest.TestCase):
                          [('Senate race poll', fa.wb_time('20261102060000'))])
         self.assertEqual(report['capture_served_after_cutoff'], 1)
 
+    def test_feed_sent_gzip_compressed_is_unpacked_and_counted(self):
+        item = ('Georgia Senate race poll', 'https://p/5', 'x', 'Sat, 31 Oct 2026 10:00:00 GMT')
+        self.capture('20261031120000', gzip.compress(rss(item)))          # what Politico and BBC World served
+        report, docs = self.parse()
+        self.assertEqual([d['title'] for d in docs], ['Georgia Senate race poll'])
+        self.assertEqual(report['captures_content_gzip'], 1)
+        self.assertNotIn('capture_unparsable_ParseError', report)
+
     def test_item_dated_after_its_capture_and_broken_captures_are_counted_not_used(self):
         self.capture('20261031120000', rss(('Future', 'https://p/4', 'z', 'Sun, 01 Nov 2026 10:00:00 GMT')))
         self.capture('20261031130000', b'<html>Wayback error page</html><p>')
