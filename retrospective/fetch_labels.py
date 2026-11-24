@@ -17,6 +17,7 @@ import json
 import pathlib
 import random
 import sys
+import time
 from collections import defaultdict
 
 from src.common import load_config
@@ -68,6 +69,30 @@ def checks(con, sel):
                 events_with_several_yes=several, events_with_no_yes=none, cross_check=cross)
 
 
+def fetch_one_by_one(client, con, cfg, markets, tries=5, wait=10, sleep=time.sleep):
+    """One market per request; on an HTTP error (the API answered 503 intermittently on 25 Nov) wait and retry.
+    A market already labelled is skipped. Label logic is the live collector's (collect_resolutions)."""
+    have = {r['market_id'] for r in rows(con, 'SELECT market_id FROM resolutions')}
+    stored, problems = 0, []
+    for market in markets:
+        if market['market_id'] in have:
+            continue
+        for attempt in range(tries):
+            try:
+                stored += collect_resolutions(client, con, cfg, [market], batch=1)
+                break
+            except RuntimeError as exc:            # HTTP failure: wait and retry the same market
+                if attempt == tries - 1:
+                    problems.append(f"{market['market_id']}: {exc}")
+                else:
+                    sleep(wait)
+            except ValueError as exc:              # unresolved split / conflicting record: list it, never guess
+                problems.append(f"{market['market_id']}: {exc}")
+                break
+        sleep(0.5)
+    return stored, problems
+
+
 def main():
     cfg = load_config(str(CONFIG))
     con = connect(cfg['database'])
@@ -75,11 +100,8 @@ def main():
     markets = rows(con, 'SELECT * FROM markets ORDER BY market_id')
     if {m['market_id'] for m in markets} != set(sel):
         raise SystemExit('Replay DB markets differ from selection.csv')
-    error = None
-    try:
-        stored = collect_resolutions(HTTPClient(cfg, bucket='labels'), con, cfg, markets)
-    except ValueError as exc:            # problems are listed; labels that did arrive are kept
-        stored, error = None, str(exc)
+    stored, problems = fetch_one_by_one(HTTPClient(cfg, bucket='labels'), con, cfg, markets)
+    error = '; '.join(problems) if problems else None
     report = checks(con, sel)
     con.close()
     print('newly stored', stored, '| error', error or 'none')

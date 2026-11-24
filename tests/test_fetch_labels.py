@@ -1,6 +1,7 @@
 """B6 label checks (decisions log R15): consistency per event, demo markets by the D2 rule, reproducible sample."""
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from retrospective import fetch_labels as fl
@@ -50,6 +51,39 @@ class LabelCheckTests(unittest.TestCase):
         self.con.execute("UPDATE resolutions SET outcome=1 WHERE market_id='2'")
         self.con.commit()
         self.assertEqual(fl.checks(self.con, self.sel)['events_with_several_yes'], [('ga title', ['1', '2'])])
+
+
+class OneByOneTests(unittest.TestCase):
+    def test_retries_http_errors_skips_labelled_and_lists_problems(self):
+        markets = [dict(market_id=m) for m in ('1', '2', '3', '4')]
+        calls, waits = [], []
+
+        class Con:
+            def execute(self, *a):
+                class R:
+                    def __iter__(self): return iter([{'market_id': '1'}])   # market 1 already labelled
+                return R()
+
+        def fake(client, con, cfg, chunk, batch):
+            mid = chunk[0]['market_id']
+            calls.append(mid)
+            if mid == '2' and calls.count('2') < 3:
+                raise RuntimeError('HTTP 503 from data-api.polymarket.com')
+            if mid == '3':
+                raise ValueError('Split/non-binary resolution excluded from binary evaluation')
+            if mid == '4':
+                raise RuntimeError('HTTP 503 from data-api.polymarket.com')
+            return 1
+
+        with unittest.mock.patch.object(fl, 'collect_resolutions', fake), \
+                unittest.mock.patch.object(fl, 'rows', lambda con, sql: [{'market_id': '1'}]):
+            stored, problems = fl.fetch_one_by_one(None, Con(), {}, markets, tries=3, wait=7, sleep=waits.append)
+        self.assertEqual(stored, 1)
+        self.assertEqual(calls.count('1'), 0)                      # skipped
+        self.assertEqual(calls.count('2'), 3)                      # 503, 503, ok
+        self.assertEqual(calls.count('3'), 1)                      # a bad record is not retried
+        self.assertEqual([p.split(':')[0] for p in problems], ['3', '4'])
+        self.assertEqual(waits.count(7), 2 + 2)                    # retry waits for 2 and for 4
 
 
 if __name__ == '__main__':
